@@ -1,0 +1,17 @@
+services:
+  api:
+    build:
+      context: .
+    image: hacom-ai-telco-engine:0.2.0
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENVIRONMENT: docker
+      # Interpolated from the shell or a local .env file; defaults keep the
+      # container fully functional with no credentials.
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_MAX_STEPS: ${LLM_MAX_STEPS:-4}
+    restart: unless-stopped
