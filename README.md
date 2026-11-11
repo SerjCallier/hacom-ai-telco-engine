@@ -166,6 +166,119 @@ conformance.
 
 ## Architecture
 
+### System Component Flow
+
+```mermaid
+flowchart TD
+    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+    classDef api fill:#e8f5e9,stroke:#388e3c,stroke-width:2px;
+    classDef core fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
+    classDef rag fill:#ede7f6,stroke:#512da8,stroke-width:2px;
+    classDef llm fill:#fce4ec,stroke:#c2185b,stroke-width:2px;
+
+    subgraph INGESTION[" Ingestion & Client Layer "]
+        NOC["Network Operations (NOC)"]:::client
+        OSS["OSS / EMS Telemetry Feed"]:::client
+    end
+
+    subgraph GATEWAY[" FastAPI Async Gateway "]
+        AUTH["Middleware & CORS"]:::api
+        VAL["Pydantic v2 Request Validation"]:::api
+        ROUTES["Routes: /telemetry, /agent, /health"]:::api
+    end
+
+    subgraph ENGINE[" Deterministic Domain Engine (0 LLM) "]
+        RULES["Pure Diagnostic Rules<br/>(3GPP TS 32.425 / TS 36.214)"]:::core
+        POLICY["Operator Policy Thresholds<br/>(RAN_* Env Configuration)"]:::core
+        REPORT["Diagnostic Report & Provenance"]:::core
+    end
+
+    subgraph AGENTIC[" Agent & Observability Core "]
+        LOOP["Bounded Orchestration Loop<br/>(max_steps ceiling)"]:::api
+        TRACE["Observability & Tracing<br/>(Per-tool latency, summaries, status)"]:::api
+        TOOLS["Tool Contracts<br/>(diagnose_cell, search_runbooks)"]:::api
+    end
+
+    subgraph RAG_PIPELINE[" Retrieval Pipeline "]
+        BM25["BM25 Lexical Engine<br/>(Heading-weighted, Bilingual Glossary)"]:::rag
+        CORPUS["Operational Runbooks<br/>(Section-level chunking)"]:::rag
+        VECTORDESIGN["Vector Extension Point<br/>(pgvector / Qdrant ready)"]:::rag
+    end
+
+    subgraph PROVIDERS[" LLM Provider Layer "]
+        MOCK["Offline Mock Stub<br/>(Zero credentials, 100% deterministic)"]:::llm
+        OPENAI["OpenAI-Compatible Client<br/>(vLLM, Ollama, LM Studio, Cloud LLMs)"]:::llm
+    end
+
+    NOC -->|Chat query| ROUTES
+    OSS -->|Cell KPIs| ROUTES
+    ROUTES --> VAL --> LOOP
+    LOOP --> TOOLS
+    TOOLS -->|Telemetry context| RULES
+    RULES -.-> POLICY
+    RULES --> REPORT
+    TOOLS -->|Query| BM25
+    BM25 --> CORPUS
+    BM25 -.-> VECTORDESIGN
+    LOOP --> MOCK
+    LOOP --> OPENAI
+    LOOP --> TRACE
+```
+
+### Telco Signaling & Diagnostic Sequence Flow
+
+In telecommunications, signaling and call flows dictate predictable end-to-end exchanges.
+The engine treats agent orchestration with the same rigor:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor NOC as Network Operator / OSS
+    participant API as FastAPI Gateway<br/>(Async REST)
+    participant Agent as Agent Orchestrator<br/>(Bounded Loop)
+    participant Core as Deterministic Rules<br/>(Pure Domain)
+    participant RAG as Retrieval Engine<br/>(BM25 / Vector DB)
+    participant LLM as LLM Provider<br/>(Mock / OpenAI-compat)
+
+    Note over NOC,API: 1. Telemetry & Diagnostic Query
+    NOC->>API: POST /api/v1/agent/chat<br/>{message, cell: KpiSnapshot}
+    activate API
+    API->>API: Pydantic v2 schema validation<br/>& context binding
+    API->>Agent: run_agent(message, context, max_steps=4)
+    activate Agent
+
+    Note over Agent,LLM: Step 1: Decision on Tools
+    Agent->>LLM: complete(messages, tools=[diagnose_cell, search_runbooks])
+    LLM-->>Agent: tool_calls: [diagnose_cell(), search_runbooks(query)]
+
+    par Tool Execution 1: Deterministic Telemetry
+        Agent->>Core: diagnose_cell(ToolContext.cell)
+        activate Core
+        Note over Core: Evaluate 3GPP rules:<br/>PRB congestion, SINR vs RSRP,<br/>spectral efficiency, DCR
+        Core-->>Agent: DiagnosticReport(verdict, findings, recommendations)
+        deactivate Core
+    and Tool Execution 2: Grounded RAG Search
+        Agent->>RAG: search_runbooks(query, limit=3)
+        activate RAG
+        Note over RAG: Lexical BM25 (x3 heading weight)<br/>+ ES↔EN glossary normalization
+        RAG-->>Agent: ScoredChunks (chunk_id, doc_title, section, snippet)
+        deactivate RAG
+    end
+
+    Note over Agent: Record TraceStep:<br/>tool, args, payload, latency_ms
+
+    Note over Agent,LLM: Step 2: Synthesis with Citations
+    Agent->>LLM: complete(messages + tool_results)
+    LLM-->>Agent: Final synthesis with chunk citations
+
+    Agent-->>API: AgentResult(answer, trace, citations)
+    deactivate Agent
+    API-->>NOC: 200 OK: AgentChatResponse<br/>(Answer, Observable Trace, Stable Citations)
+    deactivate API
+```
+
+### Directory Structure
+
 ```
 app/
 ├── main.py                 FastAPI app factory, /health
@@ -192,6 +305,10 @@ app/
 
 `agent/` and `llm/` speak only the provider-neutral contract in `llm/base.py`, so swapping
 providers is configuration, not code. `domain/` has no knowledge of HTTP or of any model.
+
+For high-concurrency production patterns (Kubernetes manifests, Horizontal Pod Autoscaling,
+hybrid vector retrieval with `pgvector`/`Qdrant`, and OpenTelemetry/Prometheus tracing),
+see [**Production & Cloud Architecture**](docs/production-architecture.md).
 
 ---
 
