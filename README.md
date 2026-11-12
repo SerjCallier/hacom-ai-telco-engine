@@ -1,5 +1,7 @@
 # HACOM AI Telco Engine
 
+**English** | [Español](README.es.md)
+
 Applied-AI proof of concept for mobile network operations: deterministic RAN KPI
 diagnostics exposed as a service, with an agent loop and runbook retrieval on top.
 
